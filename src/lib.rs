@@ -108,7 +108,7 @@ impl<'a> Node<'a> {
             let s = std::ffi::CStr::from_ptr(raw as *const _)
                 .to_string_lossy()
                 .into_owned();
-            ffi::xmlMemFree(raw as *mut _);
+            ffi::xmlFree.expect("libxml2 xmlFree is unavailable")(raw as *mut _);
             Some(s)
         }
     }
@@ -123,7 +123,7 @@ impl<'a> Node<'a> {
             let s = std::ffi::CStr::from_ptr(raw as *const _)
                 .to_string_lossy()
                 .into_owned();
-            ffi::xmlMemFree(raw as *mut _);
+            ffi::xmlFree.expect("libxml2 xmlFree is unavailable")(raw as *mut _);
             Some(s)
         }
     }

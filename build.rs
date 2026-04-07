@@ -12,7 +12,8 @@ fn main() {
             "wrapper.h",
             "#include <libxml/HTMLparser.h>\n\
              #include <libxml/xpath.h>\n\
-             #include <libxml/tree.h>\n",
+             #include <libxml/tree.h>\n\
+             #include <libxml/xmlmemory.h>\n",
         )
         .allowlist_function("htmlReadMemory")
         .allowlist_function("xmlFreeDoc")
@@ -29,9 +30,11 @@ fn main() {
         .allowlist_function("xmlBufferLength")
         .allowlist_function("xmlNodeDump")
         .allowlist_function("xmlMemFree")
+        .allowlist_var("xmlFree")
         .allowlist_type("xmlNode")
         .allowlist_type("xmlXPathObject")
         .allowlist_type("xmlNodeSet")
+        .allowlist_type("xmlFreeFunc")
         .allowlist_type("htmlParserOption")
         .derive_default(false)
         .merge_extern_blocks(true)
