@@ -1,7 +1,10 @@
 mod ffi;
+pub mod css;
 
 use std::ffi::CString;
 use std::os::raw::c_int;
+
+use css::CssSelector;
 
 pub struct HtmlDocument {
     doc: *mut ffi::xmlDoc,
@@ -23,19 +26,51 @@ impl HtmlDocument {
         if doc.is_null() { None } else { Some(Self { doc }) }
     }
 
+    pub fn as_ptr(&self) -> *mut ffi::xmlDoc {
+        self.doc
+    }
+
+    pub fn root(&self) -> Option<Node<'_>> {
+        unsafe {
+            let root = ffi::xmlDocGetRootElement(self.doc);
+            if root.is_null() { None }
+            else {
+                Some(Node {
+                    ptr: root,
+                    doc: self.doc,
+                    _marker: std::marker::PhantomData,
+                })
+            }
+        }
+    }
+
+    /// Select elements matching a CSS selector string.
+    ///
+    /// This compiles the CSS selector to XPath internally and evaluates it.
+    /// For performance, compile once with [`CssSelector::compile`] and call
+    /// [`HtmlDocument::xpath`] directly when running the same selector against
+    /// multiple documents.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the CSS selector is syntactically invalid.
+    /// Use [`CssSelector::compile`] for fallible compilation.
     pub fn select(&self, css: &str) -> XPathSelection {
-        let xpath = format!("//{css}");
-        self.xpath(&xpath)
+        let sel = CssSelector::compile(css)
+            .unwrap_or_else(|e| panic!("invalid CSS selector '{}': {}", css, e));
+        self.xpath(sel.as_xpath())
+    }
+
+    /// Select elements using a pre-compiled [`CssSelector`].
+    ///
+    /// This avoids the compilation overhead when running the same selector
+    /// against multiple documents.
+    pub fn select_compiled(&self, sel: &CssSelector) -> XPathSelection {
+        self.xpath(sel.as_xpath())
     }
 
     pub fn xpath(&self, expr: &str) -> XPathSelection {
-        let ctx = unsafe { ffi::xmlXPathNewContext(self.doc) };
-        assert!(!ctx.is_null());
-
-        let c_expr = CString::new(expr).expect("XPath contains NUL");
-        let obj = unsafe { ffi::xmlXPathEvalExpression(c_expr.as_ptr() as *const _, ctx) };
-
-        XPathSelection { ctx, obj, doc: self.doc }
+        xpath_eval(self.doc, expr)
     }
 }
 
@@ -43,6 +78,88 @@ impl Drop for HtmlDocument {
     fn drop(&mut self) {
         unsafe { ffi::xmlFreeDoc(self.doc) };
     }
+}
+
+/// An XML document parsed by libxml2.
+///
+/// Like [`HtmlDocument`] but uses the XML parser (`xmlReadMemory`) instead of
+/// the HTML parser, which means the document must be well-formed XML.
+pub struct XmlDocument {
+    doc: *mut ffi::xmlDoc,
+}
+
+impl XmlDocument {
+    /// Parse an XML string.
+    ///
+    /// Returns `None` if libxml2 could not parse the document (e.g., it is not
+    /// well-formed XML). For error details, use a custom error handler.
+    pub fn from_string(xml: &str) -> Option<Self> {
+        let doc = unsafe {
+            ffi::xmlReadMemory(
+                xml.as_ptr() as *const _,
+                xml.len() as c_int,
+                std::ptr::null(),   // base URL
+                std::ptr::null(),   // encoding (auto-detect)
+                0,                   // options
+            )
+        };
+        if doc.is_null() { None } else { Some(Self { doc }) }
+    }
+
+    pub fn as_ptr(&self) -> *mut ffi::xmlDoc {
+        self.doc
+    }
+
+    pub fn root(&self) -> Option<Node<'_>> {
+        unsafe {
+            let root = ffi::xmlDocGetRootElement(self.doc);
+            if root.is_null() { None }
+            else {
+                Some(Node {
+                    ptr: root,
+                    doc: self.doc,
+                    _marker: std::marker::PhantomData,
+                })
+            }
+        }
+    }
+
+    /// Select elements matching a CSS selector string.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the CSS selector is syntactically invalid.
+    pub fn select(&self, css: &str) -> XPathSelection {
+        let sel = CssSelector::compile(css)
+            .unwrap_or_else(|e| panic!("invalid CSS selector '{}': {}", css, e));
+        self.xpath(sel.as_xpath())
+    }
+
+    /// Select elements using a pre-compiled [`CssSelector`].
+    pub fn select_compiled(&self, sel: &CssSelector) -> XPathSelection {
+        self.xpath(sel.as_xpath())
+    }
+
+    pub fn xpath(&self, expr: &str) -> XPathSelection {
+        xpath_eval(self.doc, expr)
+    }
+}
+
+impl Drop for XmlDocument {
+    fn drop(&mut self) {
+        unsafe { ffi::xmlFreeDoc(self.doc) };
+    }
+}
+
+/// Shared XPath evaluation — used by both [`HtmlDocument`] and [`XmlDocument`].
+fn xpath_eval(doc: *mut ffi::xmlDoc, expr: &str) -> XPathSelection {
+    let ctx = unsafe { ffi::xmlXPathNewContext(doc) };
+    assert!(!ctx.is_null());
+
+    let c_expr = CString::new(expr).expect("XPath contains NUL");
+    let obj = unsafe { ffi::xmlXPathEvalExpression(c_expr.as_ptr() as *const _, ctx) };
+
+    XPathSelection { ctx, obj, doc }
 }
 
 pub struct XPathSelection {
@@ -187,11 +304,123 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_and_select() {
+    fn test_parse_and_select_bare_tag() {
         let html = r#"<html><body><a href="/1">A</a><a href="/2">B</a></body></html>"#;
         let doc = HtmlDocument::new(html).unwrap();
         let sel = doc.select("a");
         assert_eq!(sel.len(), 2);
+    }
+
+    #[test]
+    fn test_select_descendant() {
+        let html = r#"<html><body><div><a href="/1">A</a><p><a href="/2">B</a></p></div></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("div a");
+        assert_eq!(sel.len(), 2);
+    }
+
+    #[test]
+    fn test_select_child() {
+        let html = r#"<html><body><div><a href="/1">A</a><p><a href="/2">B</a></p></div></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("div > a");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_select_id() {
+        let html = r#"<html><body><a id="link1">A</a><a id="link2">B</a></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("#link1");
+        assert_eq!(sel.len(), 1);
+        let node = sel.iter().next().unwrap();
+        assert_eq!(node.text_content().as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn test_select_class() {
+        let html = r#"<html><body><a class="ext">A</a><a class="int ext">B</a><a class="int">C</a></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select(".ext");
+        assert_eq!(sel.len(), 2);
+    }
+
+    #[test]
+    fn test_attr_present() {
+        let html = r#"<html><body><a>A</a><a href="/1">B</a></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("a[href]");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_attr_exact() {
+        let html = r#"<html><body><a href="/target">A</a><a href="/other">B</a></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("a[href=\"/target\"]");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_attr_prefix() {
+        let html = r#"<html><body><a href="https://a.com">A</a><a href="http://b.com">B</a></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("a[href^=\"https\"]");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_attr_suffix() {
+        let html = r#"<html><body><a href="/a.pdf">A</a><a href="/b.html">B</a></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("a[href$=\".pdf\"]");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_attr_substring() {
+        let html = r#"<html><body><a href="/foo/bar">A</a><a href="/baz">B</a></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("a[href*=\"bar\"]");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_first_child() {
+        let html = r#"<html><body><ul><li>A</li><li>B</li></ul></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("li:first-child");
+        assert_eq!(sel.len(), 1);
+        let node = sel.iter().next().unwrap();
+        assert_eq!(node.text_content().as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn test_last_child() {
+        let html = r#"<html><body><ul><li>A</li><li>B</li></ul></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("li:last-child");
+        assert_eq!(sel.len(), 1);
+        let node = sel.iter().next().unwrap();
+        assert_eq!(node.text_content().as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn test_nth_child() {
+        let html = r#"<html><body><ul><li>A</li><li>B</li><li>C</li></ul></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("li:nth-child(2)");
+        assert_eq!(sel.len(), 1);
+        let node = sel.iter().next().unwrap();
+        assert_eq!(node.text_content().as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn test_grouping() {
+        let html = r#"<html><body><p>A</p><a href="/1">B</a><p>C</p></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("a, p");
+        assert_eq!(sel.len(), 3);
     }
 
     #[test]
@@ -231,5 +460,60 @@ mod tests {
         let sel = doc.select("a");
         assert_eq!(sel.len(), 0);
         assert_eq!(sel.iter().count(), 0);
+    }
+
+    #[test]
+    fn test_select_compiled_reuse() {
+        let sel = CssSelector::compile("a").unwrap();
+        let html1 = r#"<html><body><a href="/1">A</a><a href="/2">B</a></body></html>"#;
+        let html2 = r#"<html><body><a href="/3">C</a></body></html>"#;
+
+        let doc1 = HtmlDocument::new(html1).unwrap();
+        let result1 = doc1.select_compiled(&sel);
+        assert_eq!(result1.len(), 2);
+
+        let doc2 = HtmlDocument::new(html2).unwrap();
+        let result2 = doc2.select_compiled(&sel);
+        assert_eq!(result2.len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid CSS selector")]
+    fn test_invalid_selector_panics() {
+        let html = r#"<html></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        doc.select("!!invalid!!");
+    }
+
+    #[test]
+    fn test_xml_document_parse_and_select() {
+        let xml = r#"<root><item id="1">A</item><item id="2">B</item></root>"#;
+        let doc = XmlDocument::from_string(xml).unwrap();
+        let sel = doc.select("item");
+        assert_eq!(sel.len(), 2);
+    }
+
+    #[test]
+    fn test_xml_document_xpath() {
+        let xml = r#"<root><item id="1">A</item><item id="2">B</item></root>"#;
+        let doc = XmlDocument::from_string(xml).unwrap();
+        let sel = doc.xpath("//item[@id='1']");
+        assert_eq!(sel.len(), 1);
+        let node = sel.iter().next().unwrap();
+        assert_eq!(node.text_content().as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn test_xml_document_root() {
+        let xml = r#"<root><child/></root>"#;
+        let doc = XmlDocument::from_string(xml).unwrap();
+        let root = doc.root().unwrap();
+        assert_eq!(root.text_content().as_deref(), Some(""));
+    }
+
+    #[test]
+    fn test_xml_malformed() {
+        // Not well-formed XML (missing closing tag)
+        assert!(XmlDocument::from_string("<root><child>").is_none());
     }
 }

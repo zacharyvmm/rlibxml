@@ -24,6 +24,7 @@ fn main() {
              #include <libxml/xmlmemory.h>\n",
         )
         .allowlist_function("htmlReadMemory")
+        .allowlist_function("xmlReadMemory")
         .allowlist_function("xmlFreeDoc")
         .allowlist_function("xmlDocGetRootElement")
         .allowlist_function("xmlXPathNewContext")
