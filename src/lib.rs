@@ -345,6 +345,140 @@ impl<'a> Node<'a> {
             s
         }
     }
+
+    /// Set an attribute value on this element.
+    ///
+    /// If the attribute already exists, its value is replaced.
+    /// The returned `Option` contains the previous value if the attribute
+    /// already existed (always `None` in a new set, but may differ from
+    /// libxml2 behavior — check libxml2 docs).
+    pub fn set_attribute(&self, name: &str, value: &str) {
+        let c_name = CString::new(name).expect("attribute name contains NUL");
+        let c_value = CString::new(value).expect("attribute value contains NUL");
+        unsafe {
+            ffi::xmlSetProp(
+                self.ptr,
+                c_name.as_ptr() as *const _,
+                c_value.as_ptr() as *const _,
+            );
+        }
+    }
+
+    /// Remove an attribute from this element.
+    ///
+    /// Returns `true` if the attribute existed and was removed.
+    pub fn remove_attribute(&self, name: &str) -> bool {
+        let c_name = CString::new(name).expect("attribute name contains NUL");
+        // xmlUnsetProp returns 0 on success, -1 if the attribute didn't exist
+        unsafe { ffi::xmlUnsetProp(self.ptr, c_name.as_ptr() as *const _) == 0 }
+    }
+
+    /// Set the text content of this node, replacing any existing children.
+    pub fn set_text_content(&self, text: &str) {
+        let c_text = CString::new(text).expect("text contains NUL");
+        unsafe {
+            ffi::xmlNodeSetContent(self.ptr, c_text.as_ptr() as *const _);
+        }
+    }
+
+    /// Append a child node to this element.
+    ///
+    /// # Safety
+    ///
+    /// The child node must have been created from the same document as this node.
+    /// After appending, the child is owned by the document and will be freed
+    /// when the document is dropped.
+    pub fn append_child(&self, child: &Node) {
+        unsafe {
+            ffi::xmlAddChild(self.ptr, child.ptr);
+        }
+    }
+
+    /// Append a text node with the given content to this element.
+    pub fn append_text(&self, text: &str) {
+        let c_text = CString::new(text).expect("text contains NUL");
+        unsafe {
+            let text_node = ffi::xmlNewText(c_text.as_ptr() as *const _);
+            ffi::xmlAddChild(self.ptr, text_node);
+        }
+    }
+
+    /// Remove this node from the tree without freeing it.
+    ///
+    /// After calling this, the node is detached from the document and
+    /// **you are responsible for freeing it** with [`Node::free`] or
+    /// re-attaching it to another parent. Failing to do either will leak memory.
+    ///
+    /// Use [`Node::remove_and_free`] for the common case where you want to
+    /// both detach and free.
+    pub fn unlink(&self) {
+        unsafe {
+            ffi::xmlUnlinkNode(self.ptr);
+        }
+    }
+}
+
+/// Document-level node creation methods.
+impl XmlDocument {
+    /// Create a new element node.
+    ///
+    /// The caller must either:
+    /// 1. Append this node to the document tree (transfers ownership), or
+    /// 2. Call [`Node::free`] to release the memory.
+    pub fn create_element(&self, name: &str) -> Node<'_> {
+        let c_name = CString::new(name).expect("element name contains NUL");
+        let ptr = unsafe {
+            ffi::xmlNewNode(std::ptr::null_mut(), c_name.as_ptr() as *const _)
+        };
+        Node {
+            ptr,
+            doc: self.doc,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Create a new text node.
+    ///
+    /// The caller must either:
+    /// 1. Append this node to the document tree, or
+    /// 2. Call [`Node::free`] to release the memory.
+    pub fn create_text_node(&self, text: &str) -> Node<'_> {
+        let c_text = CString::new(text).expect("text contains NUL");
+        let ptr = unsafe {
+            ffi::xmlNewText(c_text.as_ptr() as *const _)
+        };
+        Node {
+            ptr,
+            doc: self.doc,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a> Node<'a> {
+    /// Free this node.
+    ///
+    /// Only call this on nodes that are **not** currently attached to a document
+    /// tree (i.e., nodes created with [`XmlDocument::create_element`] that were
+    /// never appended, or nodes that have been [`Node::unlink`]ed).
+    ///
+    /// # Safety
+    ///
+    /// Calling `free` on a node still attached to the document tree will cause
+    /// a double-free when the document is dropped.
+    pub unsafe fn free(&self) {
+        ffi::xmlFreeNode(self.ptr);
+    }
+
+    /// Remove this node from the tree and free it.
+    ///
+    /// After this call, the node and any references to it are invalid.
+    pub fn remove(&self) {
+        unsafe {
+            ffi::xmlUnlinkNode(self.ptr);
+            ffi::xmlFreeNode(self.ptr);
+        }
+    }
 }
 
 pub struct NodeIter<'a> {
@@ -717,5 +851,60 @@ mod tests {
         assert_eq!(second.prev_sibling().unwrap().text_content().as_deref(), Some("A"));
         // last has no next
         assert!(third.next_sibling().is_none());
+    }
+
+    #[test]
+    fn test_dom_create_and_append() {
+        let xml = "<root/>";
+        let doc = XmlDocument::from_string(xml).unwrap();
+        let root = doc.root().unwrap();
+
+        let child = doc.create_element("item");
+        root.append_child(&child);
+
+        // Verify via XPath
+        let sel = doc.xpath("//item");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_dom_set_and_remove_attribute() {
+        let xml = "<root><item/></root>";
+        let doc = XmlDocument::from_string(xml).unwrap();
+        let sel = doc.xpath("//item");
+        let item = sel.iter().next().unwrap();
+
+        // Set attribute
+        item.set_attribute("id", "42");
+        assert_eq!(item.get_attribute("id").as_deref(), Some("42"));
+
+        // Update attribute
+        item.set_attribute("id", "99");
+        assert_eq!(item.get_attribute("id").as_deref(), Some("99"));
+
+        // Remove attribute
+        assert!(item.remove_attribute("id"));
+        assert_eq!(item.get_attribute("id"), None);
+    }
+
+    #[test]
+    fn test_dom_set_text_content() {
+        let xml = "<root><item>old</item></root>";
+        let doc = XmlDocument::from_string(xml).unwrap();
+        let sel = doc.xpath("//item");
+        let item = sel.iter().next().unwrap();
+
+        item.set_text_content("new text");
+        assert_eq!(item.text_content().as_deref(), Some("new text"));
+    }
+
+    #[test]
+    fn test_dom_append_text() {
+        let xml = "<root/>";
+        let doc = XmlDocument::from_string(xml).unwrap();
+        let root = doc.root().unwrap();
+
+        root.append_text("hello world");
+        assert_eq!(root.text_content().as_deref(), Some("hello world"));
     }
 }
