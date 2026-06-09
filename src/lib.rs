@@ -216,6 +216,83 @@ pub struct Node<'a> {
 }
 
 impl<'a> Node<'a> {
+    /// The tag name of this element (e.g., `"div"`, `"a"`).
+    ///
+    /// Returns an empty string for non-element nodes or if the name is null.
+    pub fn name(&self) -> &str {
+        unsafe {
+            let raw = (*self.ptr).name;
+            if raw.is_null() {
+                return "";
+            }
+            std::ffi::CStr::from_ptr(raw as *const _)
+                .to_str()
+                .unwrap_or("")
+        }
+    }
+
+    /// The libxml2 node type (see [`node_type`] constants).
+    pub fn node_type(&self) -> u32 {
+        unsafe { (*self.ptr).type_ as u32 }
+    }
+
+    /// The parent of this node, if any.
+    pub fn parent(&self) -> Option<Node<'a>> {
+        unsafe {
+            let p = (*self.ptr).parent;
+            if p.is_null() || p == std::ptr::null_mut() {
+                None
+            } else {
+                Some(Node {
+                    ptr: p,
+                    doc: self.doc,
+                    _marker: std::marker::PhantomData,
+                })
+            }
+        }
+    }
+
+    /// Iterate over the children of this node.
+    pub fn children(&self) -> ChildrenIter<'a> {
+        ChildrenIter {
+            current: unsafe { (*self.ptr).children },
+            doc: self.doc,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// The next sibling (the node immediately after this one under the same parent).
+    pub fn next_sibling(&self) -> Option<Node<'a>> {
+        unsafe {
+            let n = (*self.ptr).next;
+            if n.is_null() {
+                None
+            } else {
+                Some(Node {
+                    ptr: n,
+                    doc: self.doc,
+                    _marker: std::marker::PhantomData,
+                })
+            }
+        }
+    }
+
+    /// The previous sibling (the node immediately before this one under the same parent).
+    pub fn prev_sibling(&self) -> Option<Node<'a>> {
+        unsafe {
+            let n = (*self.ptr).prev;
+            if n.is_null() {
+                None
+            } else {
+                Some(Node {
+                    ptr: n,
+                    doc: self.doc,
+                    _marker: std::marker::PhantomData,
+                })
+            }
+        }
+    }
+
     pub fn text_content(&self) -> Option<String> {
         unsafe {
             let raw = ffi::xmlNodeGetContent(self.ptr);
@@ -298,6 +375,79 @@ impl<'a> Iterator for NodeIter<'a> {
 }
 
 impl ExactSizeIterator for NodeIter<'_> {}
+
+/// An iterator over the children of a libxml2 node.
+///
+/// Walks the `xmlNode::children` → `xmlNode::next` linked list.
+pub struct ChildrenIter<'a> {
+    current: *mut ffi::xmlNode,
+    doc: *mut ffi::xmlDoc,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> Iterator for ChildrenIter<'a> {
+    type Item = Node<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current.is_null() {
+            return None;
+        }
+        let node = self.current;
+        // Advance to next sibling before returning current
+        self.current = unsafe { (*self.current).next };
+        Some(Node {
+            ptr: node,
+            doc: self.doc,
+            _marker: std::marker::PhantomData,
+        })
+    }
+}
+
+/// libxml2 node type constants.
+///
+/// Use with [`Node::node_type`].
+pub mod node_type {
+    /// Element node (e.g., `<div>`, `<p>`).
+    pub const ELEMENT: u32 = 1;
+    /// Attribute node.
+    pub const ATTRIBUTE: u32 = 2;
+    /// Text node.
+    pub const TEXT: u32 = 3;
+    /// CDATA section node.
+    pub const CDATA: u32 = 4;
+    /// Entity reference node.
+    pub const ENTITY_REF: u32 = 5;
+    /// Entity declaration node.
+    pub const ENTITY: u32 = 6;
+    /// Processing instruction node.
+    pub const PI: u32 = 7;
+    /// Comment node.
+    pub const COMMENT: u32 = 8;
+    /// Document node.
+    pub const DOCUMENT: u32 = 9;
+    /// Document type node.
+    pub const DOCUMENT_TYPE: u32 = 10;
+    /// Document fragment node.
+    pub const DOCUMENT_FRAG: u32 = 11;
+    /// Notation node.
+    pub const NOTATION: u32 = 12;
+    /// HTML document node (libxml2-specific).
+    pub const HTML_DOCUMENT: u32 = 13;
+    /// DTD node.
+    pub const DTD: u32 = 14;
+    /// Element declaration node.
+    pub const ELEMENT_DECL: u32 = 15;
+    /// Attribute declaration node.
+    pub const ATTRIBUTE_DECL: u32 = 16;
+    /// Entity declaration node.
+    pub const ENTITY_DECL: u32 = 17;
+    /// Namespace declaration node.
+    pub const NAMESPACE_DECL: u32 = 18;
+    /// XInclude start node.
+    pub const XINCLUDE_START: u32 = 19;
+    /// XInclude end node.
+    pub const XINCLUDE_END: u32 = 20;
+}
 
 #[cfg(test)]
 mod tests {
@@ -515,5 +665,57 @@ mod tests {
     fn test_xml_malformed() {
         // Not well-formed XML (missing closing tag)
         assert!(XmlDocument::from_string("<root><child>").is_none());
+    }
+
+    #[test]
+    fn test_node_name_and_type() {
+        let html = r#"<html><body><div id="main"><p>Hello</p></div></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("div");
+        let div = sel.iter().next().unwrap();
+        assert_eq!(div.name(), "div");
+        assert_eq!(div.node_type(), node_type::ELEMENT);
+    }
+
+    #[test]
+    fn test_node_children_iteration() {
+        let html = r#"<html><body><ul><li>A</li><li>B</li><li>C</li></ul></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("ul");
+        let ul = sel.iter().next().unwrap();
+        let items: Vec<String> = ul
+            .children()
+            .filter(|n| n.node_type() == node_type::ELEMENT)
+            .filter_map(|n| n.text_content())
+            .collect();
+        assert_eq!(items, vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn test_node_parent() {
+        let html = r#"<html><body><div><p>Hello</p></div></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("p");
+        let p = sel.iter().next().unwrap();
+        let parent = p.parent().unwrap();
+        assert_eq!(parent.name(), "div");
+    }
+
+    #[test]
+    fn test_node_siblings() {
+        let html = r#"<html><body><ul><li>A</li><li>B</li><li>C</li></ul></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("li");
+        let mut iter = sel.iter();
+        let first = iter.next().unwrap();
+        let second = iter.next().unwrap();
+        let third = iter.next().unwrap();
+
+        // next_sibling
+        assert_eq!(first.next_sibling().unwrap().text_content().as_deref(), Some("B"));
+        // prev_sibling
+        assert_eq!(second.prev_sibling().unwrap().text_content().as_deref(), Some("A"));
+        // last has no next
+        assert!(third.next_sibling().is_none());
     }
 }
