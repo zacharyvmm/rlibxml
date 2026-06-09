@@ -80,6 +80,22 @@ impl Drop for HtmlDocument {
     }
 }
 
+/// Serialization helpers.
+impl HtmlDocument {
+    /// Serialize the document as an HTML string.
+    pub fn to_html(&self) -> Option<String> {
+        self.root().map(|root| root.inner_html())
+    }
+}
+
+/// Serialization helpers.
+impl XmlDocument {
+    /// Serialize the document as an XML string.
+    pub fn to_string(&self) -> Option<String> {
+        self.root().map(|root| root.inner_html())
+    }
+}
+
 /// An XML document parsed by libxml2.
 ///
 /// Like [`HtmlDocument`] but uses the XML parser (`xmlReadMemory`) instead of
@@ -467,7 +483,7 @@ impl<'a> Node<'a> {
     /// Calling `free` on a node still attached to the document tree will cause
     /// a double-free when the document is dropped.
     pub unsafe fn free(&self) {
-        ffi::xmlFreeNode(self.ptr);
+        unsafe { ffi::xmlFreeNode(self.ptr) };
     }
 
     /// Remove this node from the tree and free it.
