@@ -55,7 +55,7 @@ impl HtmlDocument {
     ///
     /// Panics if the CSS selector is syntactically invalid.
     /// Use [`CssSelector::compile`] for fallible compilation.
-    pub fn select(&self, css: &str) -> XPathSelection {
+    pub fn select(&self, css: &str) -> XPathSelection<'_> {
         let sel = CssSelector::compile(css)
             .unwrap_or_else(|e| panic!("invalid CSS selector '{}': {}", css, e));
         self.xpath(sel.as_xpath())
@@ -65,11 +65,11 @@ impl HtmlDocument {
     ///
     /// This avoids the compilation overhead when running the same selector
     /// against multiple documents.
-    pub fn select_compiled(&self, sel: &CssSelector) -> XPathSelection {
+    pub fn select_compiled(&self, sel: &CssSelector) -> XPathSelection<'_> {
         self.xpath(sel.as_xpath())
     }
 
-    pub fn xpath(&self, expr: &str) -> XPathSelection {
+    pub fn xpath<'a>(&'a self, expr: &str) -> XPathSelection<'a> {
         xpath_eval(self.doc, expr)
     }
 }
@@ -156,7 +156,7 @@ impl XmlDocument {
         self.xpath(sel.as_xpath())
     }
 
-    pub fn xpath(&self, expr: &str) -> XPathSelection {
+    pub fn xpath<'a>(&'a self, expr: &str) -> XPathSelection<'a> {
         xpath_eval(self.doc, expr)
     }
 }
@@ -168,23 +168,29 @@ impl Drop for XmlDocument {
 }
 
 /// Shared XPath evaluation — used by both [`HtmlDocument`] and [`XmlDocument`].
-fn xpath_eval(doc: *mut ffi::xmlDoc, expr: &str) -> XPathSelection {
+fn xpath_eval<'a>(doc: *mut ffi::xmlDoc, expr: &str) -> XPathSelection<'a> {
     let ctx = unsafe { ffi::xmlXPathNewContext(doc) };
     assert!(!ctx.is_null());
 
     let c_expr = CString::new(expr).expect("XPath contains NUL");
     let obj = unsafe { ffi::xmlXPathEvalExpression(c_expr.as_ptr() as *const _, ctx) };
 
-    XPathSelection { ctx, obj, doc }
+    XPathSelection {
+        ctx,
+        obj,
+        doc,
+        _marker: std::marker::PhantomData,
+    }
 }
 
-pub struct XPathSelection {
+pub struct XPathSelection<'a> {
     ctx: *mut ffi::xmlXPathContext,
     obj: *mut ffi::xmlXPathObject,
     doc: *mut ffi::xmlDoc,
+    _marker: std::marker::PhantomData<&'a ()>,
 }
 
-impl XPathSelection {
+impl<'a> XPathSelection<'a> {
     pub fn len(&self) -> usize {
         self.nodeset_len()
     }
@@ -216,7 +222,7 @@ impl XPathSelection {
     }
 }
 
-impl Drop for XPathSelection {
+impl Drop for XPathSelection<'_> {
     fn drop(&mut self) {
         if !self.obj.is_null() {
             unsafe { ffi::xmlXPathFreeObject(self.obj) };
@@ -498,7 +504,7 @@ impl<'a> Node<'a> {
 }
 
 pub struct NodeIter<'a> {
-    sel: &'a XPathSelection,
+    sel: &'a XPathSelection<'a>,
     index: usize,
 }
 
