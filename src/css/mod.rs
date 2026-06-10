@@ -86,11 +86,11 @@ impl CssSelector {
     /// let selection = doc.xpath(sel.as_xpath());
     /// ```
     pub fn compile(css: &str) -> Result<Self, ParseError> {
-        // Quick path for single bare tag names — avoid parser overhead
-        if is_bare_tag(css) {
+        // Fast-path for common selectors — avoids parser overhead
+        if let Some(xpath) = fast_path_compile(css) {
             return Ok(Self {
                 css: css.to_string(),
-                xpath: format!("//{}", css.trim()),
+                xpath,
             });
         }
 
@@ -119,13 +119,100 @@ impl fmt::Display for CssSelector {
     }
 }
 
-/// Returns true if `input` looks like a bare tag name (no spaces, no special chars).
-fn is_bare_tag(input: &str) -> bool {
-    let s = input.trim();
+/// Fast-path for common CSS selectors that don't need the full parser.
+///
+/// Returns `Some(xpath)` if the selector can be compiled without the parser,
+/// or `None` to fall through to normal compilation.
+fn fast_path_compile(css: &str) -> Option<String> {
+    let s = css.trim();
     if s.is_empty() {
+        return None;
+    }
+
+    // Bare tag: "div", "a", "span", "custom-element", etc.
+    if is_bare_tag(s) {
+        return Some(format!("//{}", s));
+    }
+
+    // Bare ID: "#my-id"
+    if let Some(id) = s.strip_prefix('#') {
+        if is_bare_tag(id) && !id.is_empty() {
+            return Some(format!("//*[@id='{}']", escape_xpath_str(id)));
+        }
+    }
+
+    // Bare class: ".my-class"
+    if let Some(class) = s.strip_prefix('.') {
+        if is_bare_tag(class) && !class.is_empty() {
+            return Some(format!(
+                "//*[contains(concat(' ', normalize-space(@class), ' '), ' {} ')]",
+                escape_xpath_str(class)
+            ));
+        }
+    }
+
+    // Tag with ID: "div#my-id" or "a#link"
+    if let Some(hash_pos) = s.find('#') {
+        let tag = &s[..hash_pos];
+        let id = &s[hash_pos + 1..];
+        if is_bare_tag(tag) && is_bare_tag(id) && !tag.is_empty() && !id.is_empty() {
+            return Some(format!("//{}[@id='{}']", tag, escape_xpath_str(id)));
+        }
+    }
+
+    // Tag with class: "div.my-class"
+    if let Some(dot_pos) = s.find('.') {
+        let tag = &s[..dot_pos];
+        let class = &s[dot_pos + 1..];
+        if is_bare_tag(tag) && is_bare_tag(class) && !tag.is_empty() && !class.is_empty() {
+            return Some(format!(
+                "//{}[contains(concat(' ', normalize-space(@class), ' '), ' {} ')]",
+                tag,
+                escape_xpath_str(class)
+            ));
+        }
+    }
+
+    None
+}
+
+/// Escape a string for safe embedding in an XPath string literal (single-quoted).
+fn escape_xpath_str(s: &str) -> String {
+    if !s.contains('\'') {
+        return s.to_string();
+    }
+    // Use concat() with alternating delimiters for strings containing single quotes
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    for c in s.chars() {
+        if c == '\'' {
+            if !current.is_empty() {
+                parts.push(format!("'{}'", current));
+                current.clear();
+            }
+            parts.push("\"'\"".to_string());
+        } else {
+            current.push(c);
+        }
+    }
+    if !current.is_empty() {
+        parts.push(format!("'{}'", current));
+    }
+    if parts.len() == 1 {
+        parts.into_iter().next().unwrap()
+    } else {
+        format!("concat({})", parts.join(", "))
+    }
+}
+
+/// Returns true if `input` looks like a bare identifier (tag name, id, class).
+fn is_bare_tag(input: &str) -> bool {
+    if input.is_empty() {
         return false;
     }
-    s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    input
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 #[cfg(test)]

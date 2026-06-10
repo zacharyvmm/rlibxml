@@ -1,11 +1,13 @@
 mod ffi;
 pub mod css;
+pub mod error;
 
 use std::ffi::CString;
 use std::os::raw::c_int;
 
 use css::CssSelector;
 
+#[derive(Debug)]
 pub struct HtmlDocument {
     doc: *mut ffi::xmlDoc,
 }
@@ -24,6 +26,35 @@ impl HtmlDocument {
             )
         };
         if doc.is_null() { None } else { Some(Self { doc }) }
+    }
+
+    /// Parse HTML like [`new`] but return an [`XmlError`] on failure.
+    pub fn try_new(html: &str) -> Result<Self, crate::error::XmlError> {
+        crate::error::XmlError::reset();
+        let doc = unsafe {
+            ffi::htmlReadMemory(
+                html.as_ptr() as *const _,
+                html.len() as c_int,
+                std::ptr::null(),
+                std::ptr::null(),
+                (ffi::htmlParserOption_HTML_PARSE_RECOVER
+                    | ffi::htmlParserOption_HTML_PARSE_NOERROR
+                    | ffi::htmlParserOption_HTML_PARSE_NOWARNING) as c_int,
+            )
+        };
+        if doc.is_null() {
+            Err(crate::error::XmlError::last()
+                .unwrap_or_else(|| crate::error::XmlError {
+                    domain: 0,
+                    code: 0,
+                    message: "unknown parsing error".into(),
+                    level: crate::error::ErrorLevel::Fatal,
+                    file: None,
+                    line: 0,
+                }))
+        } else {
+            Ok(Self { doc })
+        }
     }
 
     pub fn as_ptr(&self) -> *mut ffi::xmlDoc {
@@ -100,6 +131,7 @@ impl XmlDocument {
 ///
 /// Like [`HtmlDocument`] but uses the XML parser (`xmlReadMemory`) instead of
 /// the HTML parser, which means the document must be well-formed XML.
+#[derive(Debug)]
 pub struct XmlDocument {
     doc: *mut ffi::xmlDoc,
 }
@@ -116,10 +148,37 @@ impl XmlDocument {
                 xml.len() as c_int,
                 std::ptr::null(),   // base URL
                 std::ptr::null(),   // encoding (auto-detect)
-                0,                   // options
+                0,                // options
             )
         };
         if doc.is_null() { None } else { Some(Self { doc }) }
+    }
+
+    /// Parse XML like [`from_string`] but return an [`XmlError`] on failure.
+    pub fn try_from_string(xml: &str) -> Result<Self, crate::error::XmlError> {
+        crate::error::XmlError::reset();
+        let doc = unsafe {
+            ffi::xmlReadMemory(
+                xml.as_ptr() as *const _,
+                xml.len() as c_int,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        if doc.is_null() {
+            Err(crate::error::XmlError::last()
+                .unwrap_or_else(|| crate::error::XmlError {
+                    domain: 0,
+                    code: 0,
+                    message: "unknown parsing error".into(),
+                    level: crate::error::ErrorLevel::Fatal,
+                    file: None,
+                    line: 0,
+                }))
+        } else {
+            Ok(Self { doc })
+        }
     }
 
     pub fn as_ptr(&self) -> *mut ffi::xmlDoc {
@@ -1259,5 +1318,25 @@ mod tests {
         let div = sel.iter().next().unwrap();
         let children: Vec<_> = div.children().collect();
         assert!(children.is_empty());
+    }
+
+    // ── Error capture tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_error_capture_xml() {
+        let result = XmlDocument::try_from_string("<root><unclosed>");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(!err.message.is_empty(), "should have error message");
+        assert!(err.level == crate::error::ErrorLevel::Fatal
+            || err.level == crate::error::ErrorLevel::Error);
+    }
+
+    #[test]
+    fn test_error_capture_html() {
+        // HTML parser is forgiving, so most things succeed.
+        // But try_new should still work on valid input
+        let result = HtmlDocument::try_new("<html><body><p>Hi</p></body></html>");
+        assert!(result.is_ok());
     }
 }

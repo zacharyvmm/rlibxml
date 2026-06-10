@@ -48,6 +48,8 @@ fn main() {
         .allowlist_function("xmlUnlinkNode")
         .allowlist_function("xmlFreeNode")
         .allowlist_function("xmlMemFree")
+        .allowlist_function("xmlGetLastError")
+        .allowlist_function("xmlResetLastError")
         .allowlist_var("xmlFree")
         .allowlist_type("xmlNode")
         .allowlist_type("xmlXPathObject")
