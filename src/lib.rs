@@ -929,4 +929,19 @@ mod tests {
         root.append_text("hello world");
         assert_eq!(root.text_content().as_deref(), Some("hello world"));
     }
+
+    #[test]
+    fn test_has_pseudo_class() {
+        let html = r#"<html><body><div><a href="/1">Link</a></div><div>No link</div></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        // div:has(a) — divs that contain an <a> descendant
+        let sel = doc.select("div:has(a)");
+        assert_eq!(sel.len(), 1);
+        let node = sel.iter().next().unwrap();
+        assert_eq!(node.get_attribute("href"), None); // the div itself has no href
+        // But it contains the <a>
+        let a_sel = doc.select("div:has(a) a");
+        assert_eq!(a_sel.len(), 1);
+        assert_eq!(a_sel.iter().next().unwrap().get_attribute("href").as_deref(), Some("/1"));
+    }
 }

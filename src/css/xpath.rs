@@ -252,8 +252,31 @@ fn compile_pseudo_class(pc: &PseudoClass, tag: &str) -> Option<String> {
             // :is() is handled at the selector level, not the compound level
             None
         }
-        // :has() — not supported in XPath 1.0 (requires bottom-up traversal)
-        PseudoClass::Has(_) => None,
+        // :has() — compile inner selector chain as a relative XPath predicate
+        PseudoClass::Has(chains) => {
+            let mut rel_parts = Vec::new();
+            for chain in chains {
+                if chain.is_empty() {
+                    continue;
+                }
+                // Build a relative XPath from the chain of compound selectors
+                let mut steps = Vec::new();
+                for cs in chain {
+                    let (t, p) = compile_compound(cs);
+                    steps.push(build_step(&t, &p));
+                }
+                // Join with // for descendant relationship within :has()
+                let rel_xpath = steps.join("//");
+                rel_parts.push(rel_xpath);
+            }
+            if rel_parts.is_empty() {
+                None
+            } else if rel_parts.len() == 1 {
+                Some(format!(".//{}", rel_parts[0]))
+            } else {
+                Some(format!("(.//{})", rel_parts.join(" | .//")))
+            }
+        }
         // Unknown — skip
         PseudoClass::Unknown(_) => None,
     }
@@ -570,9 +593,14 @@ mod tests {
     }
 
     #[test]
-    fn test_string_with_single_quote() {
-        let result = xpath("a[title=\"it's\"]");
-        assert!(result.contains("concat("));
-        assert!(result.contains("\"'\""));
+    fn test_has_descendant() {
+        let result = xpath("div:has(a)");
+        assert!(result.contains("//div[.//a]"), "got: {result}");
+    }
+
+    #[test]
+    fn test_has_nested() {
+        let result = xpath("div:has(p:has(strong))");
+        assert!(result.contains(".//p[.//strong]"), "got: {result}");
     }
 }

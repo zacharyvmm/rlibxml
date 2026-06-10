@@ -9,3 +9,10 @@ vendored = []
 [build-dependencies]
 bindgen = "0.72"
 pkg-config = "0.3"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "selectors"
+harness = false
