@@ -944,4 +944,320 @@ mod tests {
         assert_eq!(a_sel.len(), 1);
         assert_eq!(a_sel.iter().next().unwrap().get_attribute("href").as_deref(), Some("/1"));
     }
+
+    // ── More CSS selector tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_select_adjacent_sibling() {
+        let html = r#"<html><body><h1>Title</h1><p>First</p><p>Second</p></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("h1 + p");
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel.iter().next().unwrap().text_content().as_deref(), Some("First"));
+    }
+
+    #[test]
+    fn test_select_general_sibling() {
+        let html = r#"<html><body><h1>Title</h1><p>A</p><p>B</p></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("h1 ~ p");
+        assert_eq!(sel.len(), 2);
+    }
+
+    #[test]
+    fn test_select_only_child() {
+        let html = r#"<html><body><ul><li>Only</li></ul><ul><li>A</li><li>B</li></ul></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("li:only-child");
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel.iter().next().unwrap().text_content().as_deref(), Some("Only"));
+    }
+
+    #[test]
+    fn test_select_empty() {
+        let html = r#"<html><body><div></div><div>Not empty</div></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("div:empty");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_select_root() {
+        let html = r#"<html><body><p>Text</p></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select(":root");
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel.iter().next().unwrap().name(), "html");
+    }
+
+    #[test]
+    fn test_select_first_of_type() {
+        let html = r#"<html><body><div><p>A</p><span>X</span><p>B</p></div></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("p:first-of-type");
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel.iter().next().unwrap().text_content().as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn test_select_last_of_type() {
+        let html = r#"<html><body><div><p>A</p><span>X</span><p>B</p></div></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("p:last-of-type");
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel.iter().next().unwrap().text_content().as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn test_select_only_of_type() {
+        let html = r#"<html><body><div><p>A</p><span>X</span></div></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("span:only-of-type");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_select_nth_child_odd_even() {
+        let html = r#"<html><body><ul><li>A</li><li>B</li><li>C</li><li>D</li></ul></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        // :nth-child(odd) — 1-based: A, C
+        let odd = doc.select("li:nth-child(odd)");
+        assert_eq!(odd.len(), 2);
+        // :nth-child(even) — B, D
+        let even = doc.select("li:nth-child(even)");
+        assert_eq!(even.len(), 2);
+    }
+
+    #[test]
+    fn test_select_nth_child_formula() {
+        let html = r#"<html><body><ul><li>A</li><li>B</li><li>C</li><li>D</li><li>E</li></ul></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        // 2n+1 → 1, 3, 5 → A, C, E
+        let sel = doc.select("li:nth-child(2n+1)");
+        assert_eq!(sel.len(), 3);
+        let texts: Vec<_> = sel.iter().filter_map(|n| n.text_content()).collect();
+        assert_eq!(texts, vec!["A", "C", "E"]);
+    }
+
+    #[test]
+    fn test_select_nth_last_child() {
+        let html = r#"<html><body><ul><li>A</li><li>B</li><li>C</li></ul></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        // :nth-last-child(1) — last element = C
+        let sel = doc.select("li:nth-last-child(1)");
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel.iter().next().unwrap().text_content().as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn test_select_nth_of_type() {
+        let html = r#"<html><body><div><span>X</span><p>A</p><p>B</p><p>C</p></div></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("p:nth-of-type(2)");
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel.iter().next().unwrap().text_content().as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn test_select_not_pseudo() {
+        let html = r#"<html><body><a class="ext">A</a><a class="int">B</a></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("a:not(.ext)");
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel.iter().next().unwrap().text_content().as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn test_select_lang() {
+        let html = r#"<html><body><p lang="en">English</p><p lang="fr">French</p><p lang="en-US">US English</p></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("p:lang(en)");
+        assert_eq!(sel.len(), 2); // "en" and "en-US" both match
+    }
+
+    #[test]
+    fn test_select_is_pseudo() {
+        let html = r#"<html><body><h1>Title</h1><h2>Sub</h2><p>Text</p></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select(":is(h1, h2)");
+        assert_eq!(sel.len(), 2);
+    }
+
+    #[test]
+    fn test_select_attr_include() {
+        let html = r#"<html><body><a class="foo bar">A</a><a class="foo">B</a></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("a[class~=\"bar\"]");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_select_attr_dash() {
+        let html = r#"<html><body><p lang="en">A</p><p lang="en-US">B</p><p lang="fr">C</p></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("p[lang|=\"en\"]");
+        assert_eq!(sel.len(), 2);
+    }
+
+    // ── Form pseudo-class tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_select_enabled_disabled() {
+        let html = r#"<html><body><form><input name="a"><input name="b" disabled></form></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let enabled = doc.select("input:enabled");
+        let disabled = doc.select("input:disabled");
+        assert_eq!(enabled.len(), 1);
+        assert_eq!(disabled.len(), 1);
+        assert_eq!(enabled.iter().next().unwrap().get_attribute("name").as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn test_select_checked() {
+        let html = r#"<html><body><form><input type="checkbox" checked><input type="checkbox"></form></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("input:checked");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_select_required_optional() {
+        let html = r#"<html><body><form><input required><input></form></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        assert_eq!(doc.select("input:required").len(), 1);
+        assert_eq!(doc.select("input:optional").len(), 1);
+    }
+
+    #[test]
+    fn test_select_readonly_readwrite() {
+        let html = r#"<html><body><form><input readonly><input></form></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        assert_eq!(doc.select("input:read-only").len(), 1);
+        assert_eq!(doc.select("input:read-write").len(), 1);
+    }
+
+    // ── Case-insensitive attribute test ───────────────────────────────────
+
+    #[test]
+    fn test_select_attr_case_insensitive() {
+        let html = r#"<html><body><a href="HTTPS://EXAMPLE.COM">Link</a><a href="http://other.com">Other</a></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        // CSS4: [attr="value" i]
+        let sel = doc.select(r#"a[href="https://example.com" i]"#);
+        assert_eq!(sel.len(), 1);
+    }
+
+    // ── DOM manipulation edge cases ───────────────────────────────────────
+
+    #[test]
+    fn test_dom_remove_node() {
+        let xml = "<root><a/><b/><c/></root>";
+        let doc = XmlDocument::from_string(xml).unwrap();
+        // Remove the <b/> node
+        let b_sel = doc.xpath("//b");
+        assert_eq!(b_sel.len(), 1);
+        let b = b_sel.iter().next().unwrap();
+        b.remove();
+
+        // Verify it's gone
+        let after = doc.xpath("//b");
+        assert_eq!(after.len(), 0);
+        // But a and c remain
+        assert_eq!(doc.xpath("//a").len(), 1);
+        assert_eq!(doc.xpath("//c").len(), 1);
+    }
+
+    #[test]
+    fn test_dom_unlink_and_free() {
+        let xml = "<root><a/></root>";
+        let doc = XmlDocument::from_string(xml).unwrap();
+        let a_sel = doc.xpath("//a");
+        let a = a_sel.iter().next().unwrap();
+        a.unlink();
+        // Node is now detached; free it
+        unsafe { a.free(); }
+        // Document no longer contains <a/>
+        assert_eq!(doc.xpath("//a").len(), 0);
+    }
+
+    #[test]
+    fn test_html_serialization_roundtrip() {
+        let html = r#"<html><body><p>Hello</p></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let serialized = doc.to_html().unwrap();
+        assert!(serialized.contains("<p>Hello</p>"), "got: {serialized}");
+    }
+
+    #[test]
+    fn test_xml_serialization_roundtrip() {
+        let xml = "<root><item>Value</item></root>";
+        let doc = XmlDocument::from_string(xml).unwrap();
+        let serialized = doc.to_string().unwrap();
+        assert!(serialized.contains("<item>Value</item>"), "got: {serialized}");
+    }
+
+    // ── XPath edge cases ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_xpath_text_node() {
+        let xml = "<root>hello</root>";
+        let doc = XmlDocument::from_string(xml).unwrap();
+        let sel = doc.xpath("//root/text()");
+        assert_eq!(sel.len(), 1);
+        let node = sel.iter().next().unwrap();
+        assert_eq!(node.name(), "text");
+        assert_eq!(node.node_type(), node_type::TEXT);
+    }
+
+    #[test]
+    fn test_xpath_count() {
+        let xml = "<root><a/><b/><c/></root>";
+        let doc = XmlDocument::from_string(xml).unwrap();
+        // count(//*) — XPath 1.0 count function
+        let sel = doc.xpath("count(//*)");
+        assert_eq!(sel.len(), 0); // count returns a number, not a nodeset
+    }
+
+    #[test]
+    fn test_xpath_attribute_axis() {
+        let xml = r#"<root><item id="42"/></root>"#;
+        let doc = XmlDocument::from_string(xml).unwrap();
+        let sel = doc.xpath("//item/@id");
+        assert_eq!(sel.len(), 1);
+    }
+
+    // ── Error cases ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_html_null_input() {
+        assert!(HtmlDocument::new("").is_some()); // empty string parses to empty doc
+    }
+
+    #[test]
+    fn test_css_compile_error() {
+        assert!(CssSelector::compile("[=]").is_err());
+        assert!(CssSelector::compile("").is_err());
+        assert!(CssSelector::compile("  ").is_err());
+    }
+
+    #[test]
+    fn test_exact_size_iterator() {
+        let html = r#"<html><body><a>A</a><a>B</a><a>C</a></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("a");
+        let mut iter = sel.iter();
+        assert_eq!(iter.len(), 3);
+        iter.next();
+        assert_eq!(iter.len(), 2);
+    }
+
+    #[test]
+    fn test_children_iterator_empty() {
+        let html = r#"<html><body><div></div></body></html>"#;
+        let doc = HtmlDocument::new(html).unwrap();
+        let sel = doc.select("div");
+        let div = sel.iter().next().unwrap();
+        let children: Vec<_> = div.children().collect();
+        assert!(children.is_empty());
+    }
 }

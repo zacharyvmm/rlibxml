@@ -218,9 +218,19 @@ fn compile_pseudo_class(pc: &PseudoClass, tag: &str) -> Option<String> {
         }
         PseudoClass::Not(inner) => {
             let (inner_tag, inner_preds) = compile_compound(inner);
-            // Build inner expression: inner_tag[pred1][pred2]...
-            let inner_expr = build_step(&inner_tag, &inner_preds);
-            Some(format!("not({})", inner_expr))
+            // Build inner expression WITHOUT the tag test — just the predicates,
+            // since :not() checks the same element, not a descendant.
+            if inner_preds.is_empty() {
+                // :not(*) should never match
+                Some("false()".into())
+            } else {
+                let pred_str = inner_preds
+                    .iter()
+                    .map(|p| format!("[{}]", p))
+                    .collect::<Vec<_>>()
+                    .join("");
+                Some(format!("not(self::*{})", pred_str))
+            }
         }
         PseudoClass::Lang(lang) => {
             Some(format!(
@@ -342,24 +352,38 @@ fn compile_selector(sel: &Selector) -> String {
             if let PseudoClass::Is(chains) = pc {
                 is_rewrite = true;
                 // Compile each chain in the :is() as alternatives
-                let mut alt_parts = Vec::new();
+                // Each alternative gets the full // prefix since :is() rewrites the selector
+                let mut alt_selectors = Vec::new();
                 for chain in chains {
                     if chain.is_empty() {
                         continue;
                     }
-                    // Build this alternative as a compound selector chain
-                    let (alt_tag, alt_preds) = compile_compound(&chain[0]);
-                    let mut alt_steps = vec![build_step(&alt_tag, &alt_preds)];
-                    // Additional compound selectors in the chain
-                    for extra in &chain[1..] {
-                        let (extra_tag, extra_preds) = compile_compound(extra);
-                        alt_steps.push(build_step(&extra_tag, &extra_preds));
-                    }
-                    alt_parts.push(alt_steps.join("//"));
+                    // Compile this chain as a full selector
+                    let alt_sel = Selector {
+                        parts: chain
+                            .iter()
+                            .map(|cs| (Combinator::None, cs.clone()))
+                            .collect(),
+                    };
+                    // But use Descendant combinator between parts for proper matching
+                    let alt_sel = Selector {
+                        parts: chain
+                            .iter()
+                            .enumerate()
+                            .map(|(i, cs)| {
+                                let comb = if i == 0 {
+                                    Combinator::None
+                                } else {
+                                    Combinator::Descendant
+                                };
+                                (comb, cs.clone())
+                            })
+                            .collect(),
+                    };
+                    alt_selectors.push(compile_selector(&alt_sel));
                 }
-                if !alt_parts.is_empty() {
-                    let union = alt_parts.join(" | ");
-                    steps.push(format!("({})", union));
+                if !alt_selectors.is_empty() {
+                    steps.push(alt_selectors.join(" | "));
                 }
                 break;
             }
