@@ -8,6 +8,7 @@ struct Libxml {
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=CC");
 
     let lib = if cfg!(feature = "vendored") {
         build_vendored_libxml()
@@ -64,11 +65,36 @@ fn main() {
         builder = builder.clang_arg(format!("-I{}", path.display()));
     }
 
+    // Some environments provide libclang without a clang executable. In that
+    // setup bindgen cannot discover the C compiler's standard include path,
+    // which makes otherwise standard headers such as `stddef.h` unavailable.
+    // Ask the configured C compiler for its include directory and pass it to
+    // libclang explicitly when it is available.
+    if let Some(include_path) = compiler_include_path() {
+        builder = builder.clang_arg("-isystem").clang_arg(include_path);
+    }
+
     let bindings = builder.generate().expect("bindgen failed");
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings
         .write_to_file(out.join("bindings.rs"))
         .expect("failed to write bindings");
+}
+
+fn compiler_include_path() -> Option<String> {
+    let compiler = env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let output = Command::new(compiler)
+        .arg("-print-file-name=include")
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let path = String::from_utf8(output.stdout).ok()?;
+    let path = path.trim();
+    (!path.is_empty() && PathBuf::from(path).is_dir()).then(|| path.to_owned())
 }
 
 fn find_system_libxml() -> Libxml {
